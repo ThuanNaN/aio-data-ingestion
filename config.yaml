@@ -1,0 +1,25 @@
+# arXiv Daily Crawler Configuration
+
+# List of categories to crawl
+# Reference: https://arxiv.org/category_taxonomy
+categories:
+  - cs.LG   # Machine Learning
+  - cs.CV   # Computer Vision
+
+# Max papers per category
+max_results_per_category: 50
+
+# Output directory
+output_dir: data
+
+# Logs directory
+log_dir: logs
+
+# Days back to fetch papers (default 1 = today only)
+days_back: 3
+
+# arXiv API settings
+api:
+  base_url: "http://export.arxiv.org/api/query"
+  # Delay between requests (seconds) - avoid rate limit
+  request_delay: 3
