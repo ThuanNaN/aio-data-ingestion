@@ -1,0 +1,21 @@
+# YouTube AI Video Crawler Configuration
+
+search:
+  query: "artificial intelligence OR machine learning OR ChatGPT OR LLM"
+  relevance_language: en   # ranking hint only — does NOT exclude non-English videos
+  region_code: US          # bias results toward a region (still not a language filter)
+  require_english: true    # post-filter via defaultAudioLanguage + title heuristic
+  video_duration: short    # short | medium | long
+  days_back: 1
+  max_results: 5
+
+download:
+  output_dir: ./downloads
+  state_file: ./downloads/downloaded_ids.json
+  video_format: "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
+  audio_format: "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
+
+api:
+  request_delay: 1.0
+  max_retries: 6
+  retry_backoff: 15.0
