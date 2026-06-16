@@ -1,92 +1,123 @@
-# arXiv Daily Crawler
 
-Automatically crawl new papers from arXiv API based on configured topics.
 
-## Installation
+# Crawl Papers – Daily Scheduler (Unified Cronjob)
 
-### 1. Install Python dependencies
+## Flow
 
-```bash
-pip install -r requirements.txt
+![Crawl Papers architecture](https://res.cloudinary.com/dptjhpkmv/image/upload/v1781624195/project_crawl_vgoskv.png)
+
+Run all crawlers from one entrypoint: `crawl_with_cronjob.py`
+
+| Job | Script |
+|-----|--------|
+| `arxiv` | `crawl_arxiv/crawl_arxiv.py` |
+| `yt` | `crawl_yt_video_audio/main.py` |
+| `unsplash` | `crawl_unsplash_image/main.py` |
+| `all` | runs all three in order |
+
+## Prerequisites
+
+- Python env with dependencies installed (e.g. conda env `crawl_vnexpress`)
+- API keys in `.env` files:
+  - `crawl_yt_video_audio/.env` → YouTube Data API key (`key=...`)
+  - `crawl_unsplash_image/.env` → Unsplash access key (`ACCESS_KEY=...`)
+
+## Manual Run
+
+From repo root:
+
+```powershell
+cd D:\STA-Tasks\crawl_papers
+conda activate crawl_vnexpress
+python crawl_with_cronjob.py --job all
 ```
 
-### 2. Configuration
+Run a single job:
 
-Edit `config.yaml` to change:
-- `categories`: List of categories to crawl (e.g., cs.LG, cs.CV, cs.AI)
-- `max_results_per_category`: Max papers per category
-- `days_back`: Number of days back to fetch papers
-
-Reference category list: https://arxiv.org/category_taxonomy
-
-## Usage
-
-### Manual Run
-
-```bash
-python crawl_with_cronjob.py
+```powershell
+python crawl_with_cronjob.py --job arxiv
+python crawl_with_cronjob.py --job yt
+python crawl_with_cronjob.py --job unsplash
 ```
 
-### Setup Windows Task Scheduler (Auto-run daily)
+## Setup Windows Task Scheduler (Auto-run daily)
 
-#### Using Command Line (PowerShell)
+### Using Command Line (PowerShell)
 
 Open PowerShell as Administrator and run:
 
 ```powershell
-$action = New-ScheduledTaskAction -Execute "cmd" -Argument "/c conda activate your_conda && python crawl_with_cronjob.py" -WorkingDirectory "D:\your_path\crawl_papers"
+$python = "C:\Users\Admin\miniconda3\envs\crawl_vnexpress\python.exe"
+$workDir = "D:\STA-Tasks\crawl_papers"
+
+$action = New-ScheduledTaskAction `
+  -Execute $python `
+  -Argument "crawl_with_cronjob.py --job all" `
+  -WorkingDirectory $workDir
+
 $trigger = New-ScheduledTaskTrigger -Daily -At 8:00AM
+
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd
-Register-ScheduledTask -TaskName "arXiv Daily Crawler" -Action $action -Trigger $trigger -Settings $settings -Description "Crawl new papers from arXiv daily"
+
+Register-ScheduledTask `
+  -TaskName "Crawl Papers Daily" `
+  -Action $action `
+  -Trigger $trigger `
+  -Settings $settings `
+  -Description "Run arxiv + yt + unsplash crawlers daily"
 ```
 
-#### Check if task was created
+> Adjust `-At 8:00AM` to your preferred time.  
+> Update `$python` if your conda env path is different.
+
+#### Alternative: activate conda via cmd
 
 ```powershell
-Get-ScheduledTask -TaskName "arXiv Daily Crawler"
+$action = New-ScheduledTaskAction `
+  -Execute "cmd" `
+  -Argument "/c C:\Users\Admin\miniconda3\condabin\conda.bat activate crawl_vnexpress && python crawl_with_cronjob.py --job all" `
+  -WorkingDirectory "D:\STA-Tasks\crawl_papers"
 ```
 
-#### Run task immediately (test)
+### Check if task was created
 
 ```powershell
-Start-ScheduledTask -TaskName "arXiv Daily Crawler"
+Get-ScheduledTask -TaskName "Crawl Papers Daily"
 ```
 
-#### Delete task
+### Run task immediately (test)
 
 ```powershell
-Unregister-ScheduledTask -TaskName "arXiv Daily Crawler" -Confirm:$false
+Start-ScheduledTask -TaskName "Crawl Papers Daily"
+```
+
+### Delete task
+
+```powershell
+Unregister-ScheduledTask -TaskName "Crawl Papers Daily" -Confirm:$false
 ```
 
 ## Directory Structure
 
 ```
 crawl_papers/
-├── crawl_with_cronjob.py   # Main script
-├── config.yaml             # Configuration
-├── requirements.txt        # Dependencies
-├── README.md               # This guide
-├── data/                   # Output CSV files
-│   └── papers_YYYY-MM-DD.csv
-└── logs/                   # Log files
-    └── crawl_YYYY-MM-DD.log
+├── crawl_with_cronjob.py       # Unified entrypoint (use this for scheduler)
+├── crawl_arxiv/
+│   ├── crawl_arxiv.py
+│   ├── config.yaml
+│   ├── data/papers_YYYY-MM-DD.csv
+│   └── logs/crawl_YYYY-MM-DD.log
+├── crawl_yt_video_audio/
+│   ├── main.py
+│   ├── config.yaml
+│   └── downloads/YYYY-MM-DD/{video,audio,subs,info}/
+└── crawl_unsplash_image/
+    ├── main.py
+    └── downloads/YYYY-MM-DD/*.jpg
 ```
 
-## Output
+## Per-module docs
 
-A new CSV file is created daily in `data/` folder with format: `papers_YYYY-MM-DD.csv`
-
-CSV columns:
-- `arxiv_id`: Paper ID on arXiv
-- `title`: Title
-- `authors`: List of authors
-- `abstract`: Abstract
-- `categories`: Paper categories
-- `published`: Publication date
-- `updated`: Last update date
-- `pdf_url`: PDF download link
-- `primary_category`: Primary queried category
-
-## Logs
-
-Logs are saved in `logs/` folder with format: `crawl_YYYY-MM-DD.log`
+- arXiv: `crawl_arxiv/README.md`
+- YouTube: `crawl_yt_video_audio/README.md`
+- Unsplash: `crawl_unsplash_image/README.md`

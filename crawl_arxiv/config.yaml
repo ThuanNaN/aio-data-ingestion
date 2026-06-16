@@ -15,11 +15,14 @@ output_dir: data
 # Logs directory
 log_dir: logs
 
-# Days back to fetch papers (default 1 = today only)
-days_back: 3
+# Days back to fetch papers (1 = today only, 3 = last 3 calendar days)
+days_back: 1
 
 # arXiv API settings
 api:
   base_url: "http://export.arxiv.org/api/query"
-  # Delay between requests (seconds) - avoid rate limit
-  request_delay: 3
+  # Delay between category requests (arXiv recommends >= 3 seconds)
+  request_delay: 5
+  timeout: 60
+  max_retries: 6
+  retry_backoff: 15

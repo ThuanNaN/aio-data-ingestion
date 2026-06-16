@@ -1,0 +1,39 @@
+# YouTube AI Video Crawler Configuration
+
+search:
+  query: "AI Research Papers"
+  relevance_language: en   # ranking hint only — does NOT exclude non-English videos
+  # region_code: US        # optional; omit to search globally
+  require_english: true    # post-filter via defaultAudioLanguage + title heuristic
+  # IMPORTANT:
+  # - YouTube API's videoDuration filter is coarse:
+  #   short < 4min, medium 4-20min, long > 20min.
+  # - Since we want 2–12 minutes, we MUST NOT set video_duration here,
+  #   otherwise we will miss 4–12 minute videos entirely.
+  # video_duration: short    # short | medium | long
+  #
+  # Crawl window. days_back=1 means "last 24h-ish" and matches YouTube UI expectations better than "today UTC".
+  days_back: 1
+  max_results: 3
+  min_duration_seconds: 120
+  max_duration_seconds: 720
+  exclude_shorts: true
+  # Keep searching/paginating until max_results is met or timeout is hit.
+  search_timeout_seconds: 3600
+
+download:
+  output_dir: ./downloads
+  state_file: ./downloads/downloaded_ids.json
+  video_format: "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
+  audio_format: "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
+  write_info_json: true
+  subtitles:
+    enabled: true
+    languages: ["en"]
+    write_auto_subs: true
+    formats: "vtt/srt"
+
+api:
+  request_delay: 1.0
+  max_retries: 6
+  retry_backoff: 15.0

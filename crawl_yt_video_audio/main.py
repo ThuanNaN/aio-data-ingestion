@@ -43,6 +43,7 @@ API_KEY = os.getenv('key')
 SEARCH = CFG['search']
 DOWNLOAD = CFG['download']
 API = CFG['api']
+EJS = CFG.get('ejs', {}) or {}
 
 DOWNLOAD_PATH = SCRIPT_DIR / DOWNLOAD['output_dir']
 STATE_PATH = SCRIPT_DIR / DOWNLOAD['state_file']
@@ -117,18 +118,33 @@ def is_likely_english(snippet):
     return latin_chars >= 8 and latin_chars >= non_latin_letters
 
 
+_ISO8601_RE = re.compile(r'^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$')
+
+
+def parse_iso8601_duration_to_seconds(s: str):
+    if not s:
+        return None
+    m = _ISO8601_RE.match(s.strip())
+    if not m:
+        return None
+    h = int(m.group(1) or 0)
+    mi = int(m.group(2) or 0)
+    sec = int(m.group(3) or 0)
+    return h * 3600 + mi * 60 + sec
+
+
 def fetch_video_details(youtube, video_ids):
     if not video_ids:
         return {}
 
     request = youtube.videos().list(
-        part='snippet',
+        part='snippet,contentDetails',
         id=','.join(video_ids),
     )
     response = execute_with_retry(request, label='videos.list')
 
     return {
-        item['id']: item['snippet']
+        item['id']: item
         for item in response.get('items', [])
     }
 
@@ -138,10 +154,18 @@ def get_recent_ai_videos(api_key, skip_ids=None):
     skip_ids = skip_ids or set()
     max_results = SEARCH['max_results']
     days_back = SEARCH['days_back']
+    min_duration_seconds = int(SEARCH.get('min_duration_seconds', 0))
+    max_duration_seconds = int(SEARCH.get('max_duration_seconds', 180))
+    search_timeout_seconds = int(SEARCH.get('search_timeout_seconds', 3600))
+    deadline = time.time() + max(1, search_timeout_seconds)
 
-    published_after = (
-        datetime.now(timezone.utc) - timedelta(days=days_back)
-    ).strftime('%Y-%m-%dT%H:%M:%SZ')
+    now = datetime.now(timezone.utc)
+    if days_back <= 0:
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        start = now - timedelta(days=days_back)
+    published_after = start.strftime('%Y-%m-%dT%H:%M:%SZ')
+    published_before = now.strftime('%Y-%m-%dT%H:%M:%SZ')
 
     print(f'Searching AI videos published after: {published_after}...')
     print(
@@ -155,27 +179,35 @@ def get_recent_ai_videos(api_key, skip_ids=None):
     video_urls = []
     next_page_token = None
     page_size = min(max(max_results * 4, 20), 50)
+    page = 0
 
-    while len(video_urls) < max_results:
+    while len(video_urls) < max_results and time.time() < deadline:
+        page += 1
+        remaining_s = int(max(0, deadline - time.time()))
+        print(f'\n[search] page={page} collected={len(video_urls)}/{max_results} remaining_timeout_s={remaining_s}')
         search_params = {
             'part': 'id,snippet',
             'q': SEARCH['query'],
             'type': 'video',
             'publishedAfter': published_after,
+            'publishedBefore': published_before,
             'relevanceLanguage': SEARCH['relevance_language'],
             'maxResults': page_size,
             'order': 'date',
         }
         if SEARCH.get('video_duration'):
             search_params['videoDuration'] = SEARCH['video_duration']
-        if SEARCH.get('region_code'):
-            search_params['regionCode'] = SEARCH['region_code']
+        region_code = SEARCH.get('region_code')
+        if region_code:
+            search_params['regionCode'] = region_code
 
         request = youtube.search().list(**search_params, pageToken=next_page_token)
         response = execute_with_retry(request, label='search.list')
         items = response.get('items', [])
+        print(f'[search] items_returned={len(items)} nextPageToken_present={bool(response.get("nextPageToken"))}')
 
         if not items:
+            print('[search] no items returned; stopping pagination')
             break
 
         candidate_ids = [
@@ -188,9 +220,11 @@ def get_recent_ai_videos(api_key, skip_ids=None):
         details = fetch_video_details(youtube, candidate_ids)
 
         for video_id in candidate_ids:
-            snippet = details.get(video_id)
-            if not snippet:
+            item = details.get(video_id)
+            if not item:
                 continue
+            snippet = item.get('snippet') or {}
+            content = item.get('contentDetails') or {}
 
             title = snippet.get('title', '')
             url = f'https://www.youtube.com/watch?v={video_id}'
@@ -204,6 +238,11 @@ def get_recent_ai_videos(api_key, skip_ids=None):
                 print(f'Skip (not English): [{lang}] {title}')
                 continue
 
+            dur_s = parse_iso8601_duration_to_seconds(content.get('duration', ''))
+            if dur_s is None or dur_s < min_duration_seconds or dur_s > max_duration_seconds:
+                print(f'Skip (duration {dur_s}s not in [{min_duration_seconds},{max_duration_seconds}]): {title}')
+                continue
+
             video_urls.append(url)
             print(f'Found: {title} - {url}')
 
@@ -212,7 +251,14 @@ def get_recent_ai_videos(api_key, skip_ids=None):
 
         next_page_token = response.get('nextPageToken')
         if not next_page_token:
+            print('[search] no nextPageToken; stopping pagination')
             break
+
+    if len(video_urls) < max_results and time.time() >= deadline:
+        print(
+            f"Search timeout reached ({search_timeout_seconds}s). "
+            f"Collected {len(video_urls)}/{max_results} matching video(s)."
+        )
 
     return video_urls
 
@@ -257,6 +303,50 @@ def download_audio_stream(url, audio_dir):
     return None, None
 
 
+def write_info_and_subs(url, info_dir, subs_dir):
+    subs_cfg = DOWNLOAD.get('subtitles') or {}
+    subs_enabled = bool(subs_cfg.get('enabled', True))
+    subs_langs = subs_cfg.get('languages') or ['en']
+    subs_formats = subs_cfg.get('formats', 'vtt/srt')
+    write_auto = bool(subs_cfg.get('write_auto_subs', True))
+
+    ydl_opts = {
+        'skip_download': True,
+        'quiet': True,
+        'no_warnings': True,
+        'noplaylist': True,
+        'outtmpl': {
+            # Note: for "infojson" template, %(ext)s is typically "info.json".
+            # So don't hardcode ".info.json" to avoid "....info.json.info.json".
+            'infojson': str(info_dir / '%(id)s.%(ext)s'),
+            'subtitle': str(subs_dir / '%(id)s.%(language)s.%(ext)s'),
+        },
+        'writeinfojson': bool(DOWNLOAD.get('write_info_json', True)),
+        'writesubtitles': subs_enabled,
+        'writeautomaticsub': subs_enabled and write_auto,
+        'subtitleslangs': subs_langs,
+        'subtitlesformat': subs_formats,
+    }
+
+    if EJS.get('js_runtimes'):
+        ydl_opts['js_runtimes'] = EJS.get('js_runtimes')
+    if EJS.get('remote_components'):
+        ydl_opts['remote_components'] = EJS.get('remote_components')
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        vid = info.get('id')
+        info_path = info_dir / f'{vid}.info.json'
+        webpage_url = info.get('webpage_url') or info.get('original_url') or ''
+        is_shorts = '/shorts/' in str(webpage_url)
+        title = info.get('title') or ''
+        return (
+            str(info_path.relative_to(SCRIPT_DIR)) if info_path.exists() else None,
+            is_shorts,
+            title,
+        )
+
+
 def download_assets(urls, base_dir, state):
     if not urls:
         print('No new videos to download.')
@@ -264,7 +354,9 @@ def download_assets(urls, base_dir, state):
 
     video_dir = base_dir / 'video'
     audio_dir = base_dir / 'audio'
-    for folder in (video_dir, audio_dir):
+    info_dir = base_dir / 'info'
+    subs_dir = base_dir / 'subs'
+    for folder in (video_dir, audio_dir, info_dir, subs_dir):
         folder.mkdir(parents=True, exist_ok=True)
 
     print(f'\nDownloading {len(urls)} item(s) into {base_dir}...')
@@ -278,15 +370,30 @@ def download_assets(urls, base_dir, state):
             'title': '',
             'video': None,
             'audio': None,
+            'infojson': None,
             'downloaded_at': datetime.now(timezone.utc).isoformat(),
         }
+
+        try:
+            print('  [meta/subs] writing info.json + subtitles...')
+            info_path, is_shorts, meta_title = write_info_and_subs(url, info_dir, subs_dir)
+            if meta_title:
+                record['title'] = meta_title
+            if SEARCH.get('exclude_shorts', True) and is_shorts:
+                print('  [skip] detected YouTube Shorts via webpage_url; skipping downloads')
+                # Don't write to state (so if later you disable exclude_shorts, it can be downloaded)
+                continue
+            if info_path:
+                record['infojson'] = info_path
+        except Exception as exc:
+            print(f'  [meta/subs] error: {exc}')
 
         try:
             print('  [video] downloading...')
             video_path, info = download_video_stream(url, video_dir)
             if video_path:
                 record['video'] = video_path
-                record['title'] = (info or {}).get('title', '')
+                record['title'] = record['title'] or (info or {}).get('title', '')
                 print(f'    saved: {Path(video_path).name}')
         except Exception as exc:
             print(f'  [video] error: {exc}')
@@ -302,7 +409,7 @@ def download_assets(urls, base_dir, state):
         except Exception as exc:
             print(f'  [audio] error: {exc}')
 
-        if record['video'] or record['audio']:
+        if record['video'] or record['audio'] or record['infojson']:
             state[video_id] = record
             save_downloaded_ids(state)
 
