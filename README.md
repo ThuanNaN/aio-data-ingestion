@@ -1,123 +1,71 @@
+# AIO Data Ingestion
 
+Daily crawler pipeline for AI-related content → local data lake (Bronze / Silver / Gold).
 
-# Crawl Papers – Daily Scheduler (Unified Cronjob)
+## Sources
 
-## Flow
+| Job | Content | Output |
+|-----|---------|--------|
+| `arxiv` | ML/CV papers from arXiv API | Silver Parquet (metadata) |
+| `yt` | AI videos via YouTube Data API + yt-dlp | Bronze media files + Silver catalog Parquet |
+| `unsplash` | Tech images via Unsplash API | Bronze images + Silver metadata Parquet |
 
-![Crawl Papers architecture](https://res.cloudinary.com/dptjhpkmv/image/upload/v1781624195/project_crawl_vgoskv.png)
+## Setup
 
-Run all crawlers from one entrypoint: `crawl_with_cronjob.py`
-
-| Job | Script |
-|-----|--------|
-| `arxiv` | `crawl_arxiv/crawl_arxiv.py` |
-| `yt` | `crawl_yt_video_audio/main.py` |
-| `unsplash` | `crawl_unsplash_image/main.py` |
-| `all` | runs all three in order |
-
-## Prerequisites
-
-- Python env with dependencies installed (e.g. conda env `crawl_vnexpress`)
-- API keys in `.env` files:
-  - `crawl_yt_video_audio/.env` → YouTube Data API key (`key=...`)
-  - `crawl_unsplash_image/.env` → Unsplash access key (`ACCESS_KEY=...`)
-
-## Manual Run
-
-From repo root:
-
-```powershell
-cd D:\STA-Tasks\crawl_papers
-conda activate crawl_vnexpress
-python crawl_with_cronjob.py --job all
+```bash
+pip install -r requirements.txt
 ```
 
-Run a single job:
+API keys (create these files before running):
 
-```powershell
-python crawl_with_cronjob.py --job arxiv
-python crawl_with_cronjob.py --job yt
-python crawl_with_cronjob.py --job unsplash
+```
+ingestion/youtube/.env   →  YOUTUBE_API_KEY=YOUR_YOUTUBE_DATA_API_KEY
+ingestion/unsplash/.env  →  ACCESS_KEY=YOUR_UNSPLASH_ACCESS_KEY
 ```
 
-## Setup Windows Task Scheduler (Auto-run daily)
+## Run
 
-### Using Command Line (PowerShell)
+```bash
+python run.py --job all
+python run.py --job arxiv
+python run.py --job yt
+python run.py --job unsplash
+```
 
-Open PowerShell as Administrator and run:
+## Data lake layout
+
+```
+data-lake/
+├── bronze/<source>/year=YYYY/month=MM/day=DD/   raw, immutable
+├── silver/<source>/year=YYYY/month=MM/day=DD/   cleaned Parquet
+├── gold/run_summary/YYYY-MM-DD.json             daily summary (appends each run)
+└── _state/<source>_ids.parquet                  dedup checkpoint
+```
+
+Query Silver with DuckDB (no server required):
+
+```python
+import duckdb
+duckdb.sql("SELECT * FROM read_parquet('data-lake/silver/arxiv/**/*.parquet', hive_partitioning=true)")
+```
+
+## Schedule (Windows Task Scheduler)
 
 ```powershell
-$python = "C:\Users\Admin\miniconda3\envs\crawl_vnexpress\python.exe"
-$workDir = "D:\STA-Tasks\crawl_papers"
+$python  = "C:\Users\Admin\miniconda3\envs\crawl_vnexpress\python.exe"
+$workDir = "D:\path\to\aio-data-ingestion"
 
-$action = New-ScheduledTaskAction `
-  -Execute $python `
-  -Argument "crawl_with_cronjob.py --job all" `
-  -WorkingDirectory $workDir
-
-$trigger = New-ScheduledTaskTrigger -Daily -At 8:00AM
-
+$action   = New-ScheduledTaskAction -Execute $python -Argument "run.py --job all" -WorkingDirectory $workDir
+$trigger  = New-ScheduledTaskTrigger -Daily -At 8:00AM
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd
 
-Register-ScheduledTask `
-  -TaskName "Crawl Papers Daily" `
-  -Action $action `
-  -Trigger $trigger `
-  -Settings $settings `
-  -Description "Run arxiv + yt + unsplash crawlers daily"
+Register-ScheduledTask -TaskName "AIO Ingestion Daily" -Action $action -Trigger $trigger -Settings $settings
 ```
 
-> Adjust `-At 8:00AM` to your preferred time.  
-> Update `$python` if your conda env path is different.
+## Subtitle → text
 
-#### Alternative: activate conda via cmd
-
-```powershell
-$action = New-ScheduledTaskAction `
-  -Execute "cmd" `
-  -Argument "/c C:\Users\Admin\miniconda3\condabin\conda.bat activate crawl_vnexpress && python crawl_with_cronjob.py --job all" `
-  -WorkingDirectory "D:\STA-Tasks\crawl_papers"
+```bash
+python ingestion/youtube/script_to_text.py
+python ingestion/youtube/script_to_text.py --input data-lake/bronze/youtube/year=.../subs
+python ingestion/youtube/script_to_text.py --input path/to/file.vtt --output path/to/out.txt
 ```
-
-### Check if task was created
-
-```powershell
-Get-ScheduledTask -TaskName "Crawl Papers Daily"
-```
-
-### Run task immediately (test)
-
-```powershell
-Start-ScheduledTask -TaskName "Crawl Papers Daily"
-```
-
-### Delete task
-
-```powershell
-Unregister-ScheduledTask -TaskName "Crawl Papers Daily" -Confirm:$false
-```
-
-## Directory Structure
-
-```
-crawl_papers/
-├── crawl_with_cronjob.py       # Unified entrypoint (use this for scheduler)
-├── crawl_arxiv/
-│   ├── crawl_arxiv.py
-│   ├── config.yaml
-│   ├── data/papers_YYYY-MM-DD.csv
-│   └── logs/crawl_YYYY-MM-DD.log
-├── crawl_yt_video_audio/
-│   ├── main.py
-│   ├── config.yaml
-│   └── downloads/YYYY-MM-DD/{video,audio,subs,info}/
-└── crawl_unsplash_image/
-    ├── main.py
-    └── downloads/YYYY-MM-DD/*.jpg
-```
-
-## Per-module docs
-
-- arXiv: `crawl_arxiv/README.md`
-- YouTube: `crawl_yt_video_audio/README.md`
-- Unsplash: `crawl_unsplash_image/README.md`

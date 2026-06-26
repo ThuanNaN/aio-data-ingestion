@@ -19,3 +19,11 @@ __pycache__/
 
 # Partial / temp downloads
 *.part
+*.tmp
+
+# Data lake — raw and processed outputs (large binary/media files)
+data-lake/bronze/
+data-lake/silver/
+data-lake/gold/
+# _state/ is intentionally tracked — it's the ingestion checkpoint
+logs/

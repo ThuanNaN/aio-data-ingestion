@@ -1,14 +1,13 @@
 """
 Convert subtitle files (.vtt / .srt) to plain text (.txt).
 
-Default layout (from crawl_yt_video_audio/main.py):
-  downloads/YYYY-MM-DD/subs/<video_id>.<lang>.vtt
-  -> downloads/YYYY-MM-DD/text/<video_id>.txt
+Default input: data-lake/bronze/youtube/ (searches recursively for .vtt/.srt)
+Output: sibling text/ directory next to each subs/ directory.
 
 Usage:
-  python script_to_text/code.py
-  python script_to_text/code.py --input downloads/2026-06-16/subs
-  python script_to_text/code.py --input path/to/file.vtt --output path/to/out.txt
+  python ingestion/youtube/script_to_text.py
+  python ingestion/youtube/script_to_text.py --input data-lake/bronze/youtube/year=.../subs
+  python ingestion/youtube/script_to_text.py --input path/to/file.vtt --output path/to/out.txt
 """
 
 from __future__ import annotations
@@ -17,8 +16,8 @@ import argparse
 import re
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_DOWNLOADS = SCRIPT_DIR / "downloads"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_INPUT = _REPO_ROOT / "data-lake" / "bronze" / "youtube"
 
 _INLINE_TS = re.compile(r"<\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?>")
 _HTML_TAG = re.compile(r"<[^>]+>")
@@ -81,7 +80,7 @@ def video_id_from_sub_path(path: Path) -> str:
 
 
 def default_output_path(sub_path: Path) -> Path:
-    # .../downloads/YYYY-MM-DD/subs/foo.vtt -> .../downloads/YYYY-MM-DD/text/foo.txt
+    # .../subs/foo.vtt -> .../text/foo.txt
     day_dir = sub_path.parent.parent
     text_dir = day_dir / "text"
     return text_dir / f"{video_id_from_sub_path(sub_path)}.txt"
@@ -106,22 +105,13 @@ def convert_file(sub_path: Path, output_path: Path | None = None) -> Path:
     return out
 
 
-def resolve_path(path: Path) -> Path:
-    if path.is_absolute():
-        return path
-    under_script = (SCRIPT_DIR / path).resolve()
-    if under_script.exists():
-        return under_script
-    return (Path.cwd() / path).resolve()
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="Convert subtitle files to plain .txt")
     parser.add_argument(
         "--input",
         type=Path,
-        default=DEFAULT_DOWNLOADS,
-        help="Subtitle file or directory (default: downloads/)",
+        default=DEFAULT_INPUT,
+        help="Subtitle file or directory (default: data-lake/bronze/youtube/)",
     )
     parser.add_argument(
         "--output",
@@ -131,7 +121,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    input_path: Path = resolve_path(args.input)
+    input_path: Path = args.input if args.input.is_absolute() else (Path.cwd() / args.input).resolve()
 
     if args.output and input_path.is_dir():
         print("Error: --output only applies when --input is a single subtitle file.")
@@ -144,7 +134,7 @@ def main() -> int:
 
     for sub_path in files:
         out_path = convert_file(sub_path, args.output if input_path.is_file() else None)
-        print(f"Wrote: {out_path.relative_to(SCRIPT_DIR)}")
+        print(f"Wrote: {out_path}")
 
     print(f"Done. Converted {len(files)} file(s).")
     return 0
