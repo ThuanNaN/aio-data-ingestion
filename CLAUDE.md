@@ -18,12 +18,15 @@ Run all crawlers:
 python run.py --job all
 ```
 
-Run individual crawlers:
+Run individual crawlers (`--job` is repeatable):
 ```bash
 python run.py --job arxiv
 python run.py --job yt
 python run.py --job unsplash
+python run.py --job arxiv --job unsplash
 ```
+
+`run.py` exits 1 if any job reports `status: "error"`.
 
 Convert downloaded subtitles to plain text (default input: `data-lake/bronze/youtube/`, searches recursively):
 ```bash
@@ -38,7 +41,13 @@ import duckdb
 duckdb.sql("SELECT * FROM read_parquet('data-lake/silver/arxiv/**/*.parquet', hive_partitioning=true)")
 ```
 
-Schedule daily run (Windows Task Scheduler):
+Schedule daily run — Linux (cron):
+```bash
+# crontab -e
+0 8 * * * cd /path/to/aio-data-ingestion && python run.py --job all >> logs/cron.log 2>&1
+```
+
+Windows (Task Scheduler):
 ```powershell
 $action   = New-ScheduledTaskAction -Execute "python" -Argument "run.py --job all" -WorkingDirectory "D:\path\to\aio-data-ingestion"
 $trigger  = New-ScheduledTaskTrigger -Daily -At 8:00AM
@@ -55,10 +64,12 @@ data-lake/
 ├── bronze/<source>/year=YYYY/month=MM/day=DD/   raw, immutable (never modify)
 ├── silver/<source>/year=YYYY/month=MM/day=DD/   cleaned, typed Parquet
 ├── gold/run_summary/YYYY-MM-DD.json             daily summary — {"date", "runs": [...]} appended each run
-└── _state/<source>_ids.parquet                  ingestion checkpoint (tracked in git)
+└── _state/<source>_ids.parquet                  ingestion checkpoint
 ```
 
-`_state/` Parquet files are the deduplication source of truth — columns: `item_id`, `ingested_at`, `status`. All writes to these files are atomic (write to `.tmp`, then `os.replace()`). Bronze and Silver partitions are gitignored; `_state/` is tracked.
+`_state/` Parquet files are the deduplication source of truth — columns: `item_id`, `ingested_at`, `status`. All writes to these files are atomic (write to `.tmp`, then replace). Silver partitions get a `_SUCCESS` marker file on completion.
+
+Note a `.gitignore` inconsistency: the comment in `.gitignore` says `_state/` is intentionally tracked, but the `data-lake/_state` pattern above it actually ignores it — only `_state/.gitkeep` is tracked. Bronze, Silver, and Gold are all gitignored.
 
 ### Package structure
 
@@ -82,7 +93,9 @@ ingestion/
     └── crawler.py   main() → same shape
 ```
 
-Each `main()` returns a result dict; `run.py` collects them and appends to `data-lake/gold/run_summary/YYYY-MM-DD.json` (re-runs the same day append to `runs[]` rather than overwrite). Logs are written to `logs/<source>_YYYY-MM-DD.log` at the repo root (gitignored).
+Each `main()` returns `{"source", "status": "ok"|"partial"|"error", "count", "errors"}`; `run.py` collects them and appends to `data-lake/gold/run_summary/YYYY-MM-DD.json` (re-runs the same day append to `runs[]` rather than overwrite). Logs are written to `logs/<source>_YYYY-MM-DD.log` at the repo root (gitignored).
+
+`docs/crawlers.md` documents every `config.yaml` option, per-source behavior, YouTube API quota costs, and Unsplash rate limits/ToS requirements — consult it before changing crawler config or behavior.
 
 ### Per-source data flow
 
