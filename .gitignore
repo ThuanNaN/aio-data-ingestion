@@ -22,6 +22,7 @@ __pycache__/
 *.tmp
 
 # Data lake — raw and processed outputs (large binary/media files)
+data-lake/_state
 data-lake/bronze/
 data-lake/silver/
 data-lake/gold/
